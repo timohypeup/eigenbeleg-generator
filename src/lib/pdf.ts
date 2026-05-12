@@ -77,7 +77,9 @@ export async function generateEigenbelegPdf(
   company: CompanyData,
   logoPath: string
 ): Promise<jsPDF> {
-  const doc = new jsPDF({ unit: "mm", format: "a4" });
+  // `compress: true` aktiviert Deflate-Kompression auf allen PDF-Streams.
+  // Spart ~20–30 % an Gesamt-Dateigröße — vor allem bei eingebetteten Bildern.
+  const doc = new jsPDF({ unit: "mm", format: "a4", compress: true });
   const logo = await loadLogo(logoPath);
 
   // --- Header: Logo rechts oben ---
@@ -248,7 +250,8 @@ export async function generateEigenbelegPdf(
       // Höhe leicht erhöht (max 22 mm), damit eingescannte Signaturen mit etwas Rand gut Platz finden.
       // Das maxWidth/maxHeight-Verhältnis wird von jsPDF eingehalten, wenn wir 0 als eine Dimension setzen
       // — wir nehmen aber explizite Maße für ein konsistentes Layout.
-      doc.addImage(url, fmt, MARGIN_X, y + 2, 60, 22);
+      // `compression: "FAST"` weist jsPDF an, eingebettete Bilder nochmal zu komprimieren.
+      doc.addImage(url, fmt, MARGIN_X, y + 2, 60, 22, undefined, "FAST");
     } catch {
       // Fallback: Linie
       doc.line(MARGIN_X, y + 20, MARGIN_X + 80, y + 20);

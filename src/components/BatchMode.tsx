@@ -5,6 +5,7 @@ import { BELEG_PREFIX, COMPANY_DEFAULTS } from "../config";
 import { downloadTemplate, parseExcelUpload } from "../lib/excel";
 import { generateEigenbelegPdf } from "../lib/pdf";
 import { buildPdfFilename } from "../lib/filename";
+import { MAX_PDF_BYTES, formatBytes } from "../lib/size";
 import type { CompanyData, EigenbelegData, PaymentMethod } from "../types";
 import { PAYMENT_METHOD_LABELS } from "../types";
 import { SignaturePad } from "./SignaturePad";
@@ -192,7 +193,10 @@ export function BatchMode({
         const filename = buildPdfFilename(beleg.belegNummer, beleg.aussteller);
         const arrayBuffer = doc.output("arraybuffer");
         zip.file(filename, arrayBuffer);
-        messages.push(`✓ ${filename}`);
+        const tooBig = arrayBuffer.byteLength > MAX_PDF_BYTES;
+        messages.push(
+          `${tooBig ? "⚠" : "✓"} ${filename} (${formatBytes(arrayBuffer.byteLength)})${tooBig ? " — überschreitet 8 MB" : ""}`
+        );
       }
       const blob = await zip.generateAsync({ type: "blob" });
       const ts = new Date().toISOString().replace(/[:T]/g, "-").split(".")[0];

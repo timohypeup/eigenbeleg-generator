@@ -9,6 +9,7 @@ import {
 } from "../config";
 import { generateEigenbelegPdf } from "../lib/pdf";
 import { buildPdfFilename } from "../lib/filename";
+import { MAX_PDF_BYTES, formatBytes } from "../lib/size";
 import type { CompanyData, EigenbelegData, PaymentMethod } from "../types";
 import { PAYMENT_METHOD_LABELS } from "../types";
 import { SignaturePad } from "./SignaturePad";
@@ -118,7 +119,11 @@ export function SingleForm({
       const blob = doc.output("blob");
       saveAs(blob, filename);
 
-      setLastResult(filename);
+      const sizeNote =
+        blob.size > MAX_PDF_BYTES
+          ? ` ⚠ Datei ist ${formatBytes(blob.size)} groß und überschreitet das 8-MB-Limit. Eventuell eine kleinere Unterschrift hochladen.`
+          : ` (${formatBytes(blob.size)})`;
+      setLastResult(`${filename}${sizeNote}`);
       resetForm(counter + 1);
     } finally {
       setBusy(false);

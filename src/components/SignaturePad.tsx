@@ -5,7 +5,12 @@ interface Props {
   onChange: (dataUrl: string | undefined) => void;
 }
 
-const MAX_UPLOAD_WIDTH = 1000;
+// Max. Breite des hochgeladenen Signaturbildes. 800 px ist für die 60 mm × 22 mm
+// Darstellung im PDF mehr als ausreichend (~340 dpi bei der finalen Größe).
+const MAX_UPLOAD_WIDTH = 800;
+// JPEG-Qualität für Re-Encoding. 0.8 liefert visuell unauffällige Ergebnisse bei
+// einem Bruchteil der PNG-Dateigröße — Unterschriften vertragen das problemlos.
+const JPEG_QUALITY = 0.8;
 
 /**
  * Liest eine Datei als Data-URL ein.
@@ -29,25 +34,34 @@ function loadImage(src: string): Promise<HTMLImageElement> {
 }
 
 /**
- * Skaliert große Uploads auf MAX_UPLOAD_WIDTH herunter, damit das PDF nicht explodiert.
- * Behält den ursprünglichen Bildtyp bei (PNG bleibt PNG, JPEG bleibt JPEG).
+ * Bereitet einen Upload für das PDF auf:
+ *  - skaliert auf max. MAX_UPLOAD_WIDTH herunter (proportional)
+ *  - encodiert immer als JPEG mit fester Qualität
+ *
+ * PNG-Originale werden hier bewusst nach JPEG konvertiert: eingescannte oder
+ * fotografierte Unterschriften enthalten Pixel-Variationen (Antialiasing, Papier-
+ * textur, Schatten), die PNG schlecht komprimiert — JPEG ist hier um Größenordnungen
+ * effizienter. Reine Strich-Zeichnungen aus dem Canvas durchlaufen diesen Pfad nicht.
  */
-async function downscaleIfNeeded(dataUrl: string): Promise<string> {
+async function processUpload(dataUrl: string): Promise<string> {
   const img = await loadImage(dataUrl);
-  if (img.naturalWidth <= MAX_UPLOAD_WIDTH) return dataUrl;
-
   const ratio = img.naturalWidth / img.naturalHeight;
-  const w = MAX_UPLOAD_WIDTH;
+  const w = Math.min(MAX_UPLOAD_WIDTH, img.naturalWidth);
   const h = w / ratio;
+
   const canvas = document.createElement("canvas");
   canvas.width = w;
   canvas.height = h;
   const ctx = canvas.getContext("2d");
   if (!ctx) return dataUrl;
+
+  // JPEG hat keinen Alpha-Kanal → vorher mit Weiß ausfüllen, damit transparente
+  // PNG-Hintergründe nicht schwarz werden.
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, w, h);
   ctx.drawImage(img, 0, 0, w, h);
 
-  const isJpeg = dataUrl.startsWith("data:image/jpeg") || dataUrl.startsWith("data:image/jpg");
-  return canvas.toDataURL(isJpeg ? "image/jpeg" : "image/png", isJpeg ? 0.9 : undefined);
+  return canvas.toDataURL("image/jpeg", JPEG_QUALITY);
 }
 
 /**
@@ -168,7 +182,7 @@ export function SignaturePad({ value, onChange }: Props) {
     }
     try {
       const raw = await readFileAsDataUrl(file);
-      const processed = await downscaleIfNeeded(raw);
+      const processed = await processUpload(raw);
       setUploadedHiRes(true);
       onChange(processed);
     } catch (err) {
