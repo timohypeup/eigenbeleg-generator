@@ -7,6 +7,7 @@ import { generateEigenbelegPdf } from "../lib/pdf";
 import { buildPdfFilename } from "../lib/filename";
 import type { CompanyData, EigenbelegData, PaymentMethod } from "../types";
 import { PAYMENT_METHOD_LABELS } from "../types";
+import { SignaturePad } from "./SignaturePad";
 
 interface Props {
   company: CompanyData;
@@ -101,6 +102,7 @@ export function BatchMode({
   const [busy, setBusy] = useState(false);
   const [log, setLog] = useState<string[]>([]);
   const [importWarnings, setImportWarnings] = useState<string[]>([]);
+  const [signature, setSignature] = useState<string | undefined>(undefined);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const validations = useMemo(() => rows.map(validateRow), [rows]);
@@ -184,8 +186,10 @@ export function BatchMode({
           messages.push(`Zeile ${i + 1} übersprungen (${v.errors.join(", ")})`);
           continue;
         }
-        const doc = await generateEigenbelegPdf(v.data, company, COMPANY_DEFAULTS.logoPath);
-        const filename = buildPdfFilename(v.data.belegNummer, v.data.aussteller);
+        // Globale Batch-Signatur in jedes Beleg-Objekt einsetzen.
+        const beleg: EigenbelegData = signature ? { ...v.data, signatureDataUrl: signature } : v.data;
+        const doc = await generateEigenbelegPdf(beleg, company, COMPANY_DEFAULTS.logoPath);
+        const filename = buildPdfFilename(beleg.belegNummer, beleg.aussteller);
         const arrayBuffer = doc.output("arraybuffer");
         zip.file(filename, arrayBuffer);
         messages.push(`✓ ${filename}`);
@@ -264,6 +268,15 @@ export function BatchMode({
             </ul>
           </div>
         )}
+      </div>
+
+      <div className="card">
+        <h2>Unterschrift für alle Belege im Stapel (optional)</h2>
+        <p className="card-sub">
+          Wird auf <strong>jeden</strong> der unten gelisteten Belege angewendet. Leer lassen, wenn jeder
+          Beleg nach dem Druck handschriftlich unterschrieben werden soll.
+        </p>
+        <SignaturePad value={signature} onChange={setSignature} />
       </div>
 
       <div className="card">

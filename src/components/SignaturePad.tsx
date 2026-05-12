@@ -5,17 +5,68 @@ interface Props {
   onChange: (dataUrl: string | undefined) => void;
 }
 
+const MAX_UPLOAD_WIDTH = 1000;
+
 /**
- * Kleine Canvas-Komponente zum Zeichnen einer Unterschrift mit Maus/Touch.
- * Liefert bei Änderung eine PNG-Data-URL zurück (oder undefined wenn geleert).
+ * Liest eine Datei als Data-URL ein.
+ */
+function readFileAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
+}
+
+function loadImage(src: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error("Bild konnte nicht geladen werden"));
+    img.src = src;
+  });
+}
+
+/**
+ * Skaliert große Uploads auf MAX_UPLOAD_WIDTH herunter, damit das PDF nicht explodiert.
+ * Behält den ursprünglichen Bildtyp bei (PNG bleibt PNG, JPEG bleibt JPEG).
+ */
+async function downscaleIfNeeded(dataUrl: string): Promise<string> {
+  const img = await loadImage(dataUrl);
+  if (img.naturalWidth <= MAX_UPLOAD_WIDTH) return dataUrl;
+
+  const ratio = img.naturalWidth / img.naturalHeight;
+  const w = MAX_UPLOAD_WIDTH;
+  const h = w / ratio;
+  const canvas = document.createElement("canvas");
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return dataUrl;
+  ctx.drawImage(img, 0, 0, w, h);
+
+  const isJpeg = dataUrl.startsWith("data:image/jpeg") || dataUrl.startsWith("data:image/jpg");
+  return canvas.toDataURL(isJpeg ? "image/jpeg" : "image/png", isJpeg ? 0.9 : undefined);
+}
+
+/**
+ * Canvas-Komponente zum Erfassen einer Unterschrift.
+ * Drei Wege: zeichnen, Datei hochladen, oder leer lassen (PDF bekommt dann eine Linie zum
+ * handschriftlichen Unterzeichnen).
  */
 export function SignaturePad({ value, onChange }: Props) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const drawingRef = useRef(false);
   const lastPointRef = useRef<{ x: number; y: number } | null>(null);
   const [isEmpty, setIsEmpty] = useState(!value);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  // True = der aktuelle Wert kommt von einem Upload (höhere Auflösung als Canvas).
+  // In dem Fall darf der Canvas-Inhalt nicht versehentlich zurückgeschrieben werden.
+  const [uploadedHiRes, setUploadedHiRes] = useState(false);
 
-  // Canvas für High-DPI Displays skalieren
+  // High-DPI-Canvas einrichten und ggf. vorhandene Signatur als Preview einzeichnen.
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -31,14 +82,29 @@ export function SignaturePad({ value, onChange }: Props) {
     ctx.lineJoin = "round";
     ctx.strokeStyle = "#111";
 
-    // Falls schon eine Signatur gesetzt ist, zeichnen
     if (value) {
-      const img = new Image();
-      img.onload = () => {
-        ctx.drawImage(img, 0, 0, rect.width, rect.height);
-        setIsEmpty(false);
-      };
-      img.src = value;
+      loadImage(value)
+        .then((img) => {
+          // Proportional zentriert ins Canvas einpassen (für die Preview).
+          const imgRatio = img.naturalWidth / img.naturalHeight;
+          const canvasRatio = rect.width / rect.height;
+          let dw: number;
+          let dh: number;
+          if (imgRatio > canvasRatio) {
+            dw = rect.width;
+            dh = dw / imgRatio;
+          } else {
+            dh = rect.height;
+            dw = dh * imgRatio;
+          }
+          const dx = (rect.width - dw) / 2;
+          const dy = (rect.height - dh) / 2;
+          ctx.drawImage(img, dx, dy, dw, dh);
+          setIsEmpty(false);
+        })
+        .catch(() => {
+          /* ignore */
+        });
     }
   }, [value]);
 
@@ -50,6 +116,9 @@ export function SignaturePad({ value, onChange }: Props) {
 
   function handlePointerDown(e: React.PointerEvent<HTMLCanvasElement>) {
     e.preventDefault();
+    // Sobald der User zeichnet, „besitzt" der Canvas die Signatur — eventuelles
+    // hochaufgelöstes Upload-Original wird durch den Canvas-Inhalt ersetzt.
+    setUploadedHiRes(false);
     canvasRef.current?.setPointerCapture(e.pointerId);
     drawingRef.current = true;
     lastPointRef.current = getPoint(e);
@@ -73,7 +142,7 @@ export function SignaturePad({ value, onChange }: Props) {
     drawingRef.current = false;
     lastPointRef.current = null;
     const canvas = canvasRef.current;
-    if (canvas && !isEmpty) {
+    if (canvas && !isEmpty && !uploadedHiRes) {
       onChange(canvas.toDataURL("image/png"));
     }
   }
@@ -86,7 +155,25 @@ export function SignaturePad({ value, onChange }: Props) {
     const rect = canvas.getBoundingClientRect();
     ctx.clearRect(0, 0, rect.width, rect.height);
     setIsEmpty(true);
+    setUploadedHiRes(false);
+    setUploadError(null);
     onChange(undefined);
+  }
+
+  async function handleUpload(file: File) {
+    setUploadError(null);
+    if (!file.type.startsWith("image/")) {
+      setUploadError("Bitte eine Bilddatei hochladen (PNG, JPG, …).");
+      return;
+    }
+    try {
+      const raw = await readFileAsDataUrl(file);
+      const processed = await downscaleIfNeeded(raw);
+      setUploadedHiRes(true);
+      onChange(processed);
+    } catch (err) {
+      setUploadError(`Upload fehlgeschlagen: ${(err as Error).message}`);
+    }
   }
 
   return (
@@ -99,14 +186,35 @@ export function SignaturePad({ value, onChange }: Props) {
         onPointerUp={handlePointerUp}
         onPointerLeave={handlePointerUp}
       />
-      <div style={{ marginTop: 6, fontSize: 12, color: "var(--muted)" }}>
-        {isEmpty
-          ? "Mit Maus oder Finger unterschreiben — oder leer lassen und später handschriftlich unterzeichnen."
-          : "Unterschrift erfasst."}{" "}
-        <button type="button" className="ghost" onClick={handleClear}>
-          Löschen
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="image/*"
+        style={{ display: "none" }}
+        onChange={(e) => {
+          const f = e.target.files?.[0];
+          if (f) void handleUpload(f);
+          e.target.value = "";
+        }}
+      />
+      <div style={{ marginTop: 6, fontSize: 12, color: "var(--muted)", display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+        <span style={{ flex: 1, minWidth: 200 }}>
+          {isEmpty
+            ? "Hier zeichnen, Datei hochladen oder leer lassen für eine handschriftliche Unterschrift."
+            : uploadedHiRes
+              ? "Unterschrift aus Datei übernommen."
+              : "Unterschrift erfasst."}
+        </span>
+        <button type="button" className="ghost" onClick={() => fileInputRef.current?.click()}>
+          📤 Datei hochladen
         </button>
+        {!isEmpty && (
+          <button type="button" className="ghost" onClick={handleClear}>
+            Löschen
+          </button>
+        )}
       </div>
+      {uploadError && <div className="error-text">{uploadError}</div>}
     </div>
   );
 }

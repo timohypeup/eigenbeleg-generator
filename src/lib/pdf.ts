@@ -236,9 +236,19 @@ export async function generateEigenbelegPdf(
   doc.text("UNTERSCHRIFT", MARGIN_X, y);
 
   if (data.signatureDataUrl) {
-    // Signatur als Bild einfügen (max 60 mm breit, 20 mm hoch)
+    // Signatur als Bild einfügen — Format aus Data-URL ableiten, damit auch JPEGs
+    // (z. B. eingescannte Unterschriften) sauber eingebettet werden.
+    const url = data.signatureDataUrl;
+    const fmt: "PNG" | "JPEG" | "WEBP" = url.startsWith("data:image/jpeg") || url.startsWith("data:image/jpg")
+      ? "JPEG"
+      : url.startsWith("data:image/webp")
+        ? "WEBP"
+        : "PNG";
     try {
-      doc.addImage(data.signatureDataUrl, "PNG", MARGIN_X, y + 2, 60, 20);
+      // Höhe leicht erhöht (max 22 mm), damit eingescannte Signaturen mit etwas Rand gut Platz finden.
+      // Das maxWidth/maxHeight-Verhältnis wird von jsPDF eingehalten, wenn wir 0 als eine Dimension setzen
+      // — wir nehmen aber explizite Maße für ein konsistentes Layout.
+      doc.addImage(url, fmt, MARGIN_X, y + 2, 60, 22);
     } catch {
       // Fallback: Linie
       doc.line(MARGIN_X, y + 20, MARGIN_X + 80, y + 20);
